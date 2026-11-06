@@ -1,6 +1,6 @@
 ﻿from fastapi import FastAPI
 
-from app.api import vendors
+from app.api import items, vendors
 
 app = FastAPI(
     title="S2P POC - Mock SAP MM + Procurement API",
@@ -8,6 +8,7 @@ app = FastAPI(
 )
 
 app.include_router(vendors.router)
+app.include_router(items.router)
 
 
 @app.get("/")

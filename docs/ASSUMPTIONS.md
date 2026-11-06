@@ -15,3 +15,10 @@ Rule: every guess goes here. Interns rank them. Only **High** severity items
 | A8 | Scoring weights (docs give order only) | Phase 5 | Ranking disagrees with human buyers | High | Pending |
 | A9 | PR approval levels and thresholds | Phase 3 | PR auto-approved or routed to the wrong approver | High | Pending |
 | A10 | Definition of "confidence" | Phase 6 | Misleading number shown to buyers | Medium | Pending |
+| A11 | One item per PR (brief's PR has a single item_id and quantity) | models/purchase_requisition.py | Multi-item PRs impossible; needs a PR-lines table plus a migration | Medium | Placeholder |
+| A12 | Status values (SUBMITTED, APPROVED, REJECTED, RFQ_CREATED, CANCELLED) invented; docs define none | core/enums.py | Wrong transitions; SAP sync status mapping breaks | Medium | Placeholder |
+| A13 | Integer PK, display number PR-00001; not SAP-style numbering | models/purchase_requisition.py | Numbers differ from real SAP PR numbers; cosmetic | Low | Decided |
+| A14 | requester is free text; no user table until login (Phase 8) | models/purchase_requisition.py | Cannot enforce who may approve whom | Medium | Placeholder |
+| A15 | quantity is a whole number | models/purchase_requisition.py | Fractional units (metres, kg) rejected | Low | Placeholder |
+| A16 | Money = Numeric(14,2), default currency INR; all timestamps stored as UTC (SQLite drops tz) | models | Wrong totals if floats creep in; wrong times if local time is mixed in | Medium | Decided |
+| A17 | 12 synthetic items in the same 4 categories as vendors | scripts/seed_items.py | Real item master has other categories; discovery finds no vendors | Low | Placeholder |
