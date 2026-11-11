@@ -17,6 +17,9 @@ class PurchaseRequisition(Base):
     __table_args__ = (
         CheckConstraint("quantity > 0", name="ck_pr_quantity_positive"),
         CheckConstraint("estimated_budget >= 0", name="ck_pr_budget_nonnegative"),
+        # B-lite: units already covered by active POs can never exceed what was requested.
+        CheckConstraint("ordered_quantity >= 0", name="ck_pr_ordered_nonneg"),
+        CheckConstraint("ordered_quantity <= quantity", name="ck_pr_ordered_within_quantity"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -24,6 +27,10 @@ class PurchaseRequisition(Base):
     department: Mapped[str] = mapped_column(String(100), nullable=False)
     item_id: Mapped[str] = mapped_column(ForeignKey("items.item_id"), nullable=False, index=True)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Units covered by ACTIVE POs. Change ONLY via app/services/po_quantity.py.
+    ordered_quantity: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     estimated_budget: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR")
     required_delivery_date: Mapped[date] = mapped_column(Date, nullable=False)
