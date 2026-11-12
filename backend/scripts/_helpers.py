@@ -2,11 +2,11 @@
 from datetime import date
 from decimal import Decimal as D
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 
 from app.db.database import SessionLocal
 from app.models import (
-    QCS, PurchaseOrder, PurchaseRequisition, Quotation, RFQ, RFQVendor,
+    QCS, Approval, AuditEvent, PurchaseOrder, PurchaseRequisition, Quotation, RFQ, RFQVendor,
 )
 from app.services.pricing import compute_quotation_amounts
 
@@ -42,10 +42,22 @@ def new_po(pr_id, quotation_id, vendor_id, quantity=10, **kw) -> PurchaseOrder:
 
 
 def cleanup(tag: str) -> None:
-    """Delete everything hanging off PRs created with this tag (FK-safe order)."""
+    """Delete everything hanging off PRs created with this tag, plus audit rows by this actor.
+    Order matters: approvals first (their foreign keys are RESTRICT)."""
     with SessionLocal() as s:
         pr_ids = list(s.scalars(select(PurchaseRequisition.id).where(PurchaseRequisition.requester == tag)))
         rfq_ids = list(s.scalars(select(RFQ.id).where(RFQ.pr_id.in_(pr_ids)))) if pr_ids else []
+        qcs_ids = list(s.scalars(select(QCS.id).where(QCS.rfq_id.in_(rfq_ids)))) if rfq_ids else []
+        po_ids = list(s.scalars(select(PurchaseOrder.id).where(PurchaseOrder.pr_id.in_(pr_ids)))) if pr_ids else []
+        conds = []
+        if pr_ids:
+            conds.append(Approval.pr_id.in_(pr_ids))
+        if qcs_ids:
+            conds.append(Approval.qcs_id.in_(qcs_ids))
+        if po_ids:
+            conds.append(Approval.po_id.in_(po_ids))
+        if conds:
+            s.execute(delete(Approval).where(or_(*conds)))
         if pr_ids:
             s.execute(delete(PurchaseOrder).where(PurchaseOrder.pr_id.in_(pr_ids)))
         if rfq_ids:
@@ -55,6 +67,7 @@ def cleanup(tag: str) -> None:
             s.execute(delete(RFQ).where(RFQ.id.in_(rfq_ids)))
         if pr_ids:
             s.execute(delete(PurchaseRequisition).where(PurchaseRequisition.id.in_(pr_ids)))
+        s.execute(delete(AuditEvent).where(AuditEvent.actor == tag))
         s.commit()
 
 
@@ -62,5 +75,5 @@ def total_rows() -> int:
     with SessionLocal() as s:
         return sum(
             s.scalar(select(func.count()).select_from(m))
-            for m in (PurchaseRequisition, RFQ, RFQVendor, Quotation, QCS, PurchaseOrder)
+            for m in (PurchaseRequisition, RFQ, RFQVendor, Quotation, QCS, PurchaseOrder, Approval, AuditEvent)
         )

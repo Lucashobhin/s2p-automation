@@ -6,6 +6,7 @@ class PRStatus(str, Enum):
     SUBMITTED = "SUBMITTED"      # created, waiting for approval
     APPROVED = "APPROVED"        # approved, ready for RFQ
     REJECTED = "REJECTED"        # approver said no (terminal)
+    RETURNED = "RETURNED"        # approver sent it back for changes; requester resubmits
     RFQ_CREATED = "RFQ_CREATED"  # RFQ generated from this PR
     CANCELLED = "CANCELLED"      # withdrawn by requester (terminal)
 
@@ -36,6 +37,12 @@ class POStatus(str, Enum):
     REJECTED = "REJECTED"
     ERP_PUSHED = "ERP_PUSHED"  # mock SAP accepted it and returned a reference
     CANCELLED = "CANCELLED"
+
+
+class ApprovalDecision(str, Enum):
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"   # final: no new approval cycle after it
+    RETURNED = "RETURNED"   # PR only (the docs say a manager may "return" a PR); opens a new cycle
 
 
 # PO statuses whose quantity counts against the PR (see A25, A30).
