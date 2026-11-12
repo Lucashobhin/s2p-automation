@@ -5,6 +5,9 @@ Run from backend/ (after seed_vendors and seed_items):
 
 Creates temporary data tagged 'check.appr.2c3' and deletes it at the end.
 """
+
+
+
 import json
 
 from sqlalchemy import delete, func, select, update

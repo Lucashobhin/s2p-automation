@@ -1,14 +1,17 @@
 ﻿from fastapi import FastAPI
 
-from app.api import items, vendors
+from app.api import items, requisitions, vendors
 
 app = FastAPI(
     title="S2P POC - Mock SAP MM + Procurement API",
     version="0.1.0",
+    description="POC. Identities (such as a PR's requester) are user-supplied and NOT verified: "
+    "there is no authentication yet.",
 )
 
-app.include_router(vendors.router)
-app.include_router(items.router)
+app.include_router(vendors.router, prefix="/api")
+app.include_router(items.router, prefix="/api")
+app.include_router(requisitions.router, prefix="/api")
 
 
 @app.get("/")

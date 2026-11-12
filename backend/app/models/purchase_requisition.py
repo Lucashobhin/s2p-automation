@@ -39,6 +39,8 @@ class PurchaseRequisition(Base):
     )
     # A repeated webhook with the same key must not create a second PR.
     idempotency_key: Mapped[str | None] = mapped_column(String(64), unique=True)
+    # sha256 of the normalised request body; lets a retry be told apart from a different request.
+    idempotency_hash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
