@@ -34,6 +34,11 @@ class Approval(Base):
         UniqueConstraint("pr_id", "level", "approval_cycle", name="uq_approval_pr_level_cycle"),
         UniqueConstraint("qcs_id", "level", "approval_cycle", name="uq_approval_qcs_level_cycle"),
         UniqueConstraint("po_id", "level", "approval_cycle", name="uq_approval_po_level_cycle"),
+        # Idempotency keys are scoped to the entity they act on: the same key on two different
+        # PRs is two different requests. (NULLs are distinct, so other entity columns never collide.)
+        UniqueConstraint("pr_id", "idempotency_key", name="uq_approval_pr_key"),
+        UniqueConstraint("qcs_id", "idempotency_key", name="uq_approval_qcs_key"),
+        UniqueConstraint("po_id", "idempotency_key", name="uq_approval_po_key"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -53,5 +58,8 @@ class Approval(Base):
     approver: Mapped[str] = mapped_column(String(100), nullable=False)  # free text until login (A14)
     decision: Mapped[str] = mapped_column(String(10), nullable=False)
     comments: Mapped[str | None] = mapped_column(Text)
-    idempotency_key: Mapped[str | None] = mapped_column(String(64), unique=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(64))
+    # sha256 of the normalised request (approver, decision, comments): a retry with the same key
+    # but a changed body is a conflict, not a replay.
+    request_hash: Mapped[str | None] = mapped_column(String(64))
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)

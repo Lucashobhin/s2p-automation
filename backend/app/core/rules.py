@@ -4,3 +4,15 @@ SUPPORTED_CURRENCIES = ("INR",)   # POC: INR only. Add codes here when finance c
 DEFAULT_CURRENCY = "INR"
 MAX_PR_QUANTITY = 1_000_000       # also keeps the value inside SQLite's integer range
 HEADER_TOKEN_PATTERN = r"^[A-Za-z0-9._:-]{1,64}$"  # allowed shape for Idempotency-Key / X-Correlation-ID
+
+DEFAULT_APPROVAL_LEVELS = 1       # A9: the docs say "multi-level" but give no levels or thresholds
+MAX_COMMENT_LENGTH = 1000         # invented limit for approval comments
+
+
+def required_approval_levels(pr) -> int:
+    """How many approval levels this PR needs. PLACEHOLDER (A9, open for the senior).
+
+    Takes the PR so real thresholds (for example by estimated_budget) can be added here later
+    without touching the database or the callers.
+    """
+    return DEFAULT_APPROVAL_LEVELS

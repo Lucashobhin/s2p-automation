@@ -60,7 +60,7 @@ def _replay(existing: PurchaseRequisition, digest: str) -> tuple[PurchaseRequisi
     raise IdempotencyConflict("Idempotency-Key was already used with a different request body")
 
 
-def _snapshot(pr: PurchaseRequisition) -> dict:
+def pr_snapshot(pr: PurchaseRequisition) -> dict:
     return {
         "id": pr.id,
         "pr_number": pr.pr_number,
@@ -74,6 +74,14 @@ def _snapshot(pr: PurchaseRequisition) -> dict:
         "required_delivery_date": pr.required_delivery_date.isoformat(),
         "status": pr.status,
     }
+
+
+def check_business_rules(session: Session, payload: PRCreate, today: date) -> None:
+    """The two checks that need today's date or the database. Shared by create and resubmit."""
+    if payload.required_delivery_date < today:
+        raise PastDeliveryDate("required_delivery_date must be today or later")
+    if session.get(Item, payload.item_id) is None:
+        raise UnknownItem(f"item {payload.item_id!r} does not exist")
 
 
 def create_requisition(
@@ -94,10 +102,7 @@ def create_requisition(
         if existing is not None:
             return _replay(existing, digest)
 
-    if payload.required_delivery_date < today:
-        raise PastDeliveryDate("required_delivery_date must be today or later")
-    if session.get(Item, payload.item_id) is None:
-        raise UnknownItem(f"item {payload.item_id!r} does not exist")
+    check_business_rules(session, payload, today)
 
     pr = PurchaseRequisition(
         requester=payload.requester,
@@ -120,7 +125,7 @@ def create_requisition(
             entity_type="PR",
             entity_id=pr.id,
             before=None,
-            after=_snapshot(pr),
+            after=pr_snapshot(pr),
             correlation_id=correlation_id,
         )
         session.commit()

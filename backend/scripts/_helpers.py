@@ -67,7 +67,11 @@ def cleanup(tag: str) -> None:
             s.execute(delete(RFQ).where(RFQ.id.in_(rfq_ids)))
         if pr_ids:
             s.execute(delete(PurchaseRequisition).where(PurchaseRequisition.id.in_(pr_ids)))
-        s.execute(delete(AuditEvent).where(AuditEvent.actor == tag))
+        # audit rows: written by the tagged requester, OR about any PR created for this tag
+        audit_conds = [AuditEvent.actor.like(f"{tag}%")]
+        if pr_ids:
+            audit_conds.append((AuditEvent.entity_type == "PR") & AuditEvent.entity_id.in_([str(i) for i in pr_ids]))
+        s.execute(delete(AuditEvent).where(or_(*audit_conds)))
         s.commit()
 
 
