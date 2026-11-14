@@ -19,7 +19,7 @@ from app.services.po_quantity import (
     deactivate_purchase_order, find_quantity_mismatches,
     release_po_quantity, reserve_po_quantity,
 )
-from scripts._helpers import cleanup, new_po, new_pr, new_quote, total_rows
+from scripts._helpers import cleanup, new_po, new_pr, new_quote, new_rfq, total_rows
 
 TAG = "check.qty.b-lite"
 VENDORS = [f"V{i:03d}" for i in range(1, 11)]
@@ -44,7 +44,7 @@ def make_pr_with_quotes(quantity: int, quote_quantities: list[int], rounds: bool
         rfq = None
         for i, qty in enumerate(quote_quantities):
             if rfq is None or rounds:
-                rfq = RFQ(pr_id=pr.id, round_number=i + 1 if rounds else 1)
+                rfq = new_rfq(pr_id=pr.id, round_number=i + 1 if rounds else 1)
                 s.add(rfq)
                 s.flush()
             s.add(RFQVendor(rfq_id=rfq.id, vendor_id=VENDORS[i]))

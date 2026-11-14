@@ -32,6 +32,13 @@ def new_quote(rfq_id, vendor_id, qty=10, price=D("4200.00"), tax=D("18.00"), **k
     return Quotation(**data)
 
 
+def new_rfq(pr_id, round_number=1, status="CANCELLED", requested_quantity=10, **kw) -> RFQ:
+    """A test RFQ. Defaults to CANCELLED so several rounds can coexist for one PR in a test
+    without tripping the one-open-RFQ-per-PR index. Pass status="DRAFT" etc. to make it open."""
+    return RFQ(pr_id=pr_id, round_number=round_number, status=status,
+               requested_quantity=requested_quantity, **kw)
+
+
 def new_po(pr_id, quotation_id, vendor_id, quantity=10, **kw) -> PurchaseOrder:
     data = dict(
         pr_id=pr_id, quotation_id=quotation_id, vendor_id=vendor_id, quantity=quantity,

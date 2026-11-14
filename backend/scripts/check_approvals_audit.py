@@ -18,7 +18,7 @@ from app.models import (
     QCS, Approval, AuditEvent, PurchaseOrder, PurchaseRequisition, RFQ, RFQVendor,
 )
 from app.services.audit import record_audit
-from scripts._helpers import cleanup, new_po, new_pr, new_quote, total_rows
+from scripts._helpers import cleanup, new_po, new_pr, new_quote, new_rfq, total_rows
 
 TAG = "check.appr.2c3"
 results: list[bool] = []
@@ -57,7 +57,7 @@ def main() -> None:
     try:
         with SessionLocal() as s:                       # setup: PRs A, B, C, a QCS and a PO
             a, b, c = new_pr(s, TAG), new_pr(s, TAG), new_pr(s, TAG)
-            rfq = RFQ(pr_id=a.id, round_number=1)
+            rfq = new_rfq(pr_id=a.id, round_number=1)
             s.add(rfq)
             s.flush()
             s.add(RFQVendor(rfq_id=rfq.id, vendor_id="V001"))

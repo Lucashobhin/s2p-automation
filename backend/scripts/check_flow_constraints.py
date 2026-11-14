@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db.database import SessionLocal
 from app.models import QCS, PurchaseOrder, Quotation, RFQ, RFQVendor
-from scripts._helpers import cleanup, new_po, new_pr, new_quote, total_rows
+from scripts._helpers import cleanup, new_po, new_pr, new_quote, new_rfq, total_rows
 
 TAG = "check.flow.2c2"
 V_INVITED_1, V_INVITED_2, V_NOT_INVITED = "V001", "V002", "V003"
@@ -49,9 +49,9 @@ def main() -> None:
         # ---- setup: PR A with RFQ rounds 1 and 2, PR B with one RFQ ----
         with SessionLocal() as s:
             pr_a, pr_b = new_pr(s, TAG), new_pr(s, TAG)
-            r1 = RFQ(pr_id=pr_a.id, round_number=1)
-            r2 = RFQ(pr_id=pr_a.id, round_number=2)
-            rb = RFQ(pr_id=pr_b.id, round_number=1)
+            r1 = new_rfq(pr_id=pr_a.id, round_number=1)
+            r2 = new_rfq(pr_id=pr_a.id, round_number=2)
+            rb = new_rfq(pr_id=pr_b.id, round_number=1)
             s.add_all([r1, r2, rb])
             s.flush()
             s.add_all([
@@ -73,13 +73,13 @@ def main() -> None:
 
         P = results.append
         print("--- RFQ rounds and idempotency (D1)")
-        P(attempt("duplicate round for same PR", lambda s: s.add(RFQ(pr_id=A, round_number=1)), "UNIQUE"))
-        P(attempt("round 3 for same PR is allowed", lambda s: s.add(RFQ(pr_id=A, round_number=3))))
-        P(attempt("round 0 rejected", lambda s: s.add(RFQ(pr_id=A, round_number=0)), "CHECK"))
-        P(attempt("RFQ for unknown PR", lambda s: s.add(RFQ(pr_id=999999, round_number=1)), "FOREIGN KEY"))
-        P(attempt("deadline before issue date", lambda s: s.add(RFQ(pr_id=B, round_number=2, issue_date=date(2026, 12, 10), response_deadline=date(2026, 12, 1))), "CHECK"))
-        P(attempt("idempotency key first use", lambda s: s.add(RFQ(pr_id=B, round_number=5, idempotency_key="chk-rfq-1"))))
-        P(attempt("same key again (retry) rejected", lambda s: s.add(RFQ(pr_id=B, round_number=6, idempotency_key="chk-rfq-1")), "UNIQUE"))
+        P(attempt("duplicate round for same PR", lambda s: s.add(new_rfq(pr_id=A, round_number=1)), "UNIQUE"))
+        P(attempt("round 3 for same PR is allowed", lambda s: s.add(new_rfq(pr_id=A, round_number=3))))
+        P(attempt("round 0 rejected", lambda s: s.add(new_rfq(pr_id=A, round_number=0)), "CHECK"))
+        P(attempt("RFQ for unknown PR", lambda s: s.add(new_rfq(pr_id=999999, round_number=1)), "FOREIGN KEY"))
+        P(attempt("deadline before issue date", lambda s: s.add(new_rfq(pr_id=B, round_number=2, issue_date=date(2026, 12, 10), response_deadline=date(2026, 12, 1))), "CHECK"))
+        P(attempt("idempotency key first use", lambda s: s.add(new_rfq(pr_id=B, round_number=5, idempotency_key="chk-rfq-1"))))
+        P(attempt("same key again (retry) rejected", lambda s: s.add(new_rfq(pr_id=B, round_number=6, idempotency_key="chk-rfq-1")), "UNIQUE"))
 
         print("\n--- Invitations and quotations (D2, D3, D4)")
         P(attempt("same vendor invited twice", lambda s: s.add(RFQVendor(rfq_id=R1, vendor_id=V_INVITED_1)), "UNIQUE"))
