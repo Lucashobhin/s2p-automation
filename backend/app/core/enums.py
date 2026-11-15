@@ -20,8 +20,9 @@ class RFQStatus(str, Enum):
 
 
 class QuotationStatus(str, Enum):
-    SUBMITTED = "SUBMITTED"
-    WITHDRAWN = "WITHDRAWN"
+    ACTIVE = "ACTIVE"          # the vendor's current quotation (at most one per RFQ and vendor)
+    SUPERSEDED = "SUPERSEDED"  # replaced by a later revision; kept as history
+    WITHDRAWN = "WITHDRAWN"    # reserved: no withdraw endpoint yet
 
 
 class QCSStatus(str, Enum):

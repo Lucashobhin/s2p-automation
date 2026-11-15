@@ -8,6 +8,10 @@ HEADER_TOKEN_PATTERN = r"^[A-Za-z0-9._:-]{1,64}$"  # allowed shape for Idempoten
 DEFAULT_APPROVAL_LEVELS = 1       # A9: the docs say "multi-level" but give no levels or thresholds
 MAX_COMMENT_LENGTH = 1000         # invented limit for approval comments
 MAX_RFQ_VENDORS = 20              # invented limit: vendors invited to one RFQ
+MAX_LEAD_TIME_DAYS = 365          # invented limit for a quotation's lead time (configurable)
+# Sealed bids: when True, quotations cannot be read by ANYONE until the RFQ deadline has passed
+# (or the RFQ is no longer PUBLISHED). Default off so the POC can be demonstrated; see A66.
+SEAL_QUOTATIONS_UNTIL_DEADLINE = False
 
 
 def required_approval_levels(pr) -> int:
