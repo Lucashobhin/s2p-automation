@@ -39,6 +39,12 @@ class RFQCancel(BaseModel):
     reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_COMMENT_LENGTH)]
 
 
+class RFQClose(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actor: Name = Field(description=f"Who is closing the RFQ. {_ACTOR_NOTE}")
+
+
 class RFQVendorRead(BaseModel):
     vendor_id: str
     vendor_name: str

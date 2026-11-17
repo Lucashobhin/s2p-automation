@@ -8,8 +8,8 @@ from app.api.headers import CorrelationHeader, IdempotencyKeyHeader, clean_heade
 from app.core.enums import RFQStatus
 from app.db.database import get_db
 from app.models.rfq import RFQ
-from app.schemas.rfq import RFQCancel, RFQGenerate, RFQPublish, RFQRead
-from app.services.rfqs import RFQError, cancel_rfq, generate_rfq, publish_rfq, to_read
+from app.schemas.rfq import RFQCancel, RFQClose, RFQGenerate, RFQPublish, RFQRead
+from app.services.rfqs import RFQError, cancel_rfq, close_rfq, generate_rfq, publish_rfq, to_read
 
 router = APIRouter(prefix="/rfq", tags=["rfq"])
 
@@ -60,11 +60,32 @@ def publish(
         _raise(exc)
 
 
+@router.post("/{rfq_id}/close", response_model=RFQRead)
+def close(
+    rfq_id: int, payload: RFQClose, db: Session = Depends(get_db), correlation_id: CorrelationHeader = None,
+):
+    """Close a PUBLISHED RFQ after its response deadline so the quotations can be evaluated.
+
+    Needs at least one ACTIVE quotation (otherwise cancel). No early close. n8n calls this after the
+    deadline: nothing here runs by itself. A repeat is 409 `RFQ_ALREADY_CLOSED` with the status.
+    """
+    corr = clean_header(correlation_id, "X-Correlation-ID")
+    try:
+        return to_read(db, close_rfq(db, rfq_id, payload, correlation_id=corr))
+    except RFQError as exc:
+        _raise(exc)
+
+
 @router.post("/{rfq_id}/cancel", response_model=RFQRead)
 def cancel(
     rfq_id: int, payload: RFQCancel, db: Session = Depends(get_db), correlation_id: CorrelationHeader = None,
 ):
-    """Cancel a DRAFT or PUBLISHED RFQ that has no quotations yet."""
+    """Cancel an RFQ so the buyer can re-tender.
+
+    DRAFT: always. PUBLISHED: only with no quotations (otherwise close it first). CLOSED: allowed even
+    with quotations (kept as history), but refused while a QCS is PENDING_APPROVAL or APPROVED or an
+    active PO exists on one of its quotations. Errors carry a `code` and the current status.
+    """
     corr = clean_header(correlation_id, "X-Correlation-ID")
     try:
         return to_read(db, cancel_rfq(db, rfq_id, payload, correlation_id=corr))

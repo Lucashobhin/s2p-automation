@@ -304,10 +304,11 @@ def main() -> None:
         r = cancel(999999)
         check("cancel unknown RFQ -> 404", r.status_code == 404 and code(r) == "RFQ_NOT_FOUND")
         set_rfq(d11, status="CLOSED")
-        r = cancel(d11)
-        check("a CLOSED RFQ cannot be cancelled yet -> 409 RFQ_NOT_CANCELLABLE", r.status_code == 409 and code(r) == "RFQ_NOT_CANCELLABLE" and detail_of(r).get("rfq_status") == "CLOSED")
         r = gen(p11)
         check("a CLOSED RFQ still BLOCKS a new round (it is open) -> 409", r.status_code == 409 and code(r) == "OPEN_RFQ_EXISTS" and detail_of(r).get("rfq_status") == "CLOSED")
+        r = cancel(d11)
+        check("3e (D43): a CLOSED RFQ WITH quotations can now be cancelled -> 200", r.status_code == 200 and r.json().get("status") == "CANCELLED", f"status={r.status_code}")
+        check("...and the PR can then be re-tendered (a new round is allowed)", gen(p11).status_code == 201)
 
         print("\n--- clarification 4: the database enforces one open RFQ per PR")
         p12 = approved_pr()
