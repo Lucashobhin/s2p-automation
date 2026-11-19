@@ -6,6 +6,7 @@ Block A (this part): errors, create (idempotent), facts about the recommendation
 """
 import hashlib
 import json
+import logging
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import exists, func, select, update
@@ -22,7 +23,8 @@ from app.models.quotation import Quotation
 from app.models.rfq import RFQ
 from app.models.vendor import Vendor
 from app.schemas.qcs import (
-    QCSCreate, QCSDecision, QCSRead, QCSRecommendation, QCSSubmit, QCSUpdate, QCSWithdraw,
+    QCSApprovalRead, QCSCreate, QCSDecision, QCSDecisionResult, QCSRead, QCSRecommendation,
+    QCSSubmit, QCSUpdate, QCSWithdraw,
 )
 from app.services.audit import record_audit
 from app.services.comparison import PERCENT, UNIT
@@ -414,3 +416,205 @@ def submit_qcs(session: Session, qcs_id: int, payload: QCSSubmit, *, correlation
         session.rollback()
         raise
     return qcs
+
+
+
+
+# ---------- block C: decision (D67-D74) ----------
+
+log = logging.getLogger(__name__)
+FINAL_QCS = (QCSStatus.APPROVED.value, QCSStatus.REJECTED.value, QCSStatus.WITHDRAWN.value)
+
+
+class _LostRace(Exception):
+    pass
+
+
+def _decision_hash(payload: QCSDecision) -> str:
+    """Hash of the NORMALISED request: approver (trimmed, case-folded), decision and comments."""
+    canonical = {
+        "approver": _norm(payload.approver),
+        "decision": payload.decision.value,
+        "comments": payload.comments,
+    }
+    return hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _find_decision_by_key(session: Session, qcs_id: int, key: str) -> Approval | None:
+    # The key is scoped to the QCS: the same key on another QCS is a different request.
+    return session.scalars(
+        select(Approval).where(Approval.qcs_id == qcs_id, Approval.idempotency_key == key)
+    ).first()
+
+
+def _decision_replay(existing: Approval, payload: QCSDecision, digest: str) -> tuple[Approval, bool]:
+    """Only the SAME approver (name-normalised) with the SAME content gets the stored approval back (D73).
+    Everyone else gets one neutral refusal that never says whose key it was."""
+    if _norm(existing.approver) != _norm(payload.approver) or existing.request_hash != digest:
+        raise QCSConflict("IDEMPOTENCY_KEY_REUSED", "Idempotency-Key was already used with a different request")
+    return existing, False
+
+
+def _own_decision_twin(session: Session, qcs_id: int, key: str | None, payload: QCSDecision, digest: str):
+    if key is None:
+        return None
+    existing = _find_decision_by_key(session, qcs_id, key)
+    return None if existing is None else _decision_replay(existing, payload, digest)
+
+
+def _check_separation(session: Session, qcs: QCS, rfq: RFQ, approver: str) -> None:
+    """D68: names only (identities are unverified). A legacy QCS with no creator skips the creator rule."""
+    me = _norm(approver)
+    if qcs.created_by is not None and _norm(qcs.created_by) == me:
+        raise QCSForbidden("SEPARATION_OF_DUTIES", "The approver may not be the QCS creator (a name check)",
+                           reason="APPROVER_IS_CREATOR")
+    pr = session.get(PurchaseRequisition, rfq.pr_id)
+    if _norm(pr.requester) == me:
+        raise QCSForbidden("SEPARATION_OF_DUTIES", "The approver may not be the requester of the PR (a name check)",
+                           reason="APPROVER_IS_REQUESTER")
+    names = session.scalars(select(Approval.approver).where(Approval.qcs_id == qcs.id)).all()
+    if any(_norm(name) == me for name in names):
+        raise QCSForbidden("SEPARATION_OF_DUTIES", "This approver already decided a level of this QCS (a name check)",
+                           reason="APPROVER_ALREADY_DECIDED_A_LEVEL")
+
+
+def _log_refused(session: Session, qcs_id: int, approver: str, payload: QCSDecision, reason: str,
+                 qcs_status: str, correlation_id: str | None) -> None:
+    """D72: record a refused attempt in its OWN transaction. If that fails, the caller's 409 still stands."""
+    try:
+        session.rollback()
+        record_audit(
+            session, actor=approver, action="QCS_DUPLICATE_DECISION_ATTEMPT", entity_type="QCS", entity_id=qcs_id,
+            before=None, after={"reason": reason, "attempted_decision": payload.decision.value,
+                                "qcs_status": qcs_status},
+            correlation_id=correlation_id,
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        log.warning("could not record the refused decision attempt on QCS %s", qcs_id, exc_info=True)
+
+
+def _decision_lost(session: Session, qcs_id: int, approver: str, payload: QCSDecision, correlation_id) -> QCSError:
+    """The UPDATE or an insert lost a race. Read the REAL state after it and name it (D71)."""
+    session.expire_all()
+    qcs = session.get(QCS, qcs_id)
+    status_now = qcs.status
+    rfq = session.get(RFQ, qcs.rfq_id)
+    if status_now != QCSStatus.PENDING_APPROVAL.value:
+        err = QCSConflict("QCS_NOT_PENDING", f"QCS is {status_now}; another decision was recorded first",
+                          qcs_status=status_now)
+    elif rfq.status != RFQStatus.CLOSED.value:
+        err = QCSConflict("RFQ_NOT_CLOSED", f"RFQ is {rfq.status}; it changed at the same moment",
+                          rfq_status=rfq.status)
+    else:
+        err = QCSConflict("QCS_CHANGED", "Another decision at this level was recorded first; read the QCS and decide again",
+                          qcs_status=status_now)
+    _log_refused(session, qcs_id, approver, payload, "CONCURRENT_DECISION", status_now, correlation_id)
+    return err
+
+
+def decide_qcs(
+    session: Session, qcs_id: int, payload: QCSDecision, *,
+    idempotency_key: str | None = None, correlation_id: str | None = None,
+) -> tuple[Approval, bool]:
+    """Returns (approval, created). created=False is an idempotent replay.
+
+    Order (D67): replay by key, 404, 403, 409 state, 409 RFQ. The level is derived by the server (D69).
+    """
+    approver = _clean_name(payload.approver, "approver")
+    digest = _decision_hash(payload)
+    twin = _own_decision_twin(session, qcs_id, idempotency_key, payload, digest)
+    if twin is not None:   # replay check FIRST, before any state rule
+        return twin
+
+    qcs = get_qcs(session, qcs_id)
+    rfq = session.get(RFQ, qcs.rfq_id)
+    try:
+        _check_separation(session, qcs, rfq, approver)
+    except QCSForbidden:
+        twin = _own_decision_twin(session, qcs_id, idempotency_key, payload, digest)   # my own twin may have committed
+        if twin is not None:
+            return twin
+        raise
+    if qcs.status != QCSStatus.PENDING_APPROVAL.value:
+        twin = _own_decision_twin(session, qcs_id, idempotency_key, payload, digest)
+        if twin is not None:
+            return twin
+        status_now = qcs.status
+        if status_now in FINAL_QCS:
+            _log_refused(session, qcs_id, approver, payload, "QCS_ALREADY_DECIDED", status_now, correlation_id)
+        raise QCSConflict("QCS_NOT_PENDING", f"QCS is {status_now}; decisions are only accepted while it is PENDING_APPROVAL",
+                          qcs_status=status_now)
+    if rfq.status != RFQStatus.CLOSED.value:
+        twin = _own_decision_twin(session, qcs_id, idempotency_key, payload, digest)
+        if twin is not None:
+            return twin
+        raise QCSConflict("RFQ_NOT_CLOSED", f"RFQ is {rfq.status}; a QCS can only be decided while its RFQ is CLOSED",
+                          rfq_status=rfq.status)
+    if qcs.recommended_quotation_id is None:
+        raise QCSInvalid("RECOMMENDATION_REQUIRED", "This QCS has no recommended quotation")
+
+    picked = session.get(Quotation, qcs.recommended_quotation_id)
+    required = rules.required_qcs_approval_levels(picked)
+    level = session.scalar(
+        select(func.count()).select_from(Approval)
+        .where(Approval.qcs_id == qcs.id, Approval.decision == ApprovalDecision.APPROVED.value)
+    ) + 1
+    decision = payload.decision
+    if decision == ApprovalDecision.APPROVED:
+        final = level >= required
+        new_status = QCSStatus.APPROVED.value if final else QCSStatus.PENDING_APPROVAL.value
+        action = "QCS_APPROVED" if final else "QCS_APPROVAL_LEVEL_APPROVED"
+    else:
+        new_status, action = QCSStatus.REJECTED.value, "QCS_REJECTED"
+    moves = new_status != QCSStatus.PENDING_APPROVAL.value
+    values = {"status": new_status} if moves else {"updated_at": QCS.updated_at}   # D70: no-op write, no new updated_at
+    if moves:
+        before = {"status": QCSStatus.PENDING_APPROVAL.value}
+        after = {"status": new_status, "level": level, "levels_required": required,
+                 "decision": decision.value, "comments": payload.comments}
+    else:
+        before = None   # the QCS did not change state: no status transition is implied
+        after = {"qcs_status": QCSStatus.PENDING_APPROVAL.value, "level": level, "levels_required": required,
+                 "decision": decision.value, "comments": payload.comments}
+
+    approval = Approval(
+        qcs_id=qcs.id, level=level, approval_cycle=1, approver=approver, decision=decision.value,
+        comments=payload.comments, idempotency_key=idempotency_key,
+        request_hash=digest if idempotency_key is not None else None,
+    )
+    try:
+        # The conditional UPDATE comes FIRST: it fails fast, and it re-checks the state and the RFQ.
+        result = session.execute(
+            update(QCS)
+            .where(QCS.id == qcs.id, QCS.status == QCSStatus.PENDING_APPROVAL.value, _rfq_is_closed())
+            .values(**values)
+        )
+        if result.rowcount != 1:
+            raise _LostRace()
+        session.add(approval)
+        session.flush()   # trips UNIQUE (qcs, level, cycle) / (qcs, key) if we lost a race
+        record_audit(
+            session, actor=approver, action=action, entity_type="QCS", entity_id=qcs.id,
+            before=before, after=after, correlation_id=correlation_id,
+        )
+        session.commit()
+    except (IntegrityError, _LostRace):
+        session.rollback()
+        twin = _own_decision_twin(session, qcs_id, idempotency_key, payload, digest)
+        if twin is not None:
+            return twin
+        raise _decision_lost(session, qcs_id, approver, payload, correlation_id)
+    except Exception:
+        session.rollback()
+        raise
+    return approval, True
+
+
+def to_decision_result(session: Session, approval: Approval) -> QCSDecisionResult:
+    """The approval as stored, plus the QCS status NOW (for a replay: its current status)."""
+    qcs = session.get(QCS, approval.qcs_id)
+    picked = session.get(Quotation, qcs.recommended_quotation_id)
+    base = QCSApprovalRead.model_validate(approval).model_dump()
+    return QCSDecisionResult(**base, qcs_status=qcs.status, levels_required=rules.required_qcs_approval_levels(picked))
