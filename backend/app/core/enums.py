@@ -30,6 +30,7 @@ class QCSStatus(str, Enum):
     PENDING_APPROVAL = "PENDING_APPROVAL"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+    WITHDRAWN = "WITHDRAWN"  # an APPROVED QCS taken back before any live PO exists (A74); terminal
 
 
 class POStatus(str, Enum):

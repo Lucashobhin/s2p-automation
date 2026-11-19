@@ -1,6 +1,6 @@
 ﻿from fastapi import FastAPI
 
-from app.api import comparison, items, quotations, requisitions, rfq, vendors
+from app.api import comparison, items, qcs, quotations, requisitions, rfq, vendors
 
 app = FastAPI(
     title="S2P POC - Mock SAP MM + Procurement API",
@@ -15,6 +15,7 @@ app.include_router(requisitions.router, prefix="/api")
 app.include_router(rfq.router, prefix="/api")
 app.include_router(quotations.router, prefix="/api")
 app.include_router(comparison.router, prefix="/api")
+app.include_router(qcs.router, prefix="/api")
 
 
 @app.get("/")
