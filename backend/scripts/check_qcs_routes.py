@@ -34,6 +34,7 @@ check("GET /api/qcs/{qcs_id}/approvals", "get" in paths.get("/api/qcs/{qcs_id}/a
 check("PATCH /api/qcs/{qcs_id}", "patch" in paths.get("/api/qcs/{qcs_id}", {}))
 check("POST /api/qcs/{qcs_id}/submit", "post" in paths.get("/api/qcs/{qcs_id}/submit", {}))
 check("POST /api/qcs/{qcs_id}/decision", "post" in paths.get("/api/qcs/{qcs_id}/decision", {}))
+check("POST /api/qcs/{qcs_id}/withdraw", "post" in paths.get("/api/qcs/{qcs_id}/withdraw", {}))
 check("create documents 201 (new) and 200 (replay)",
       {"201", "200"} <= set(post_create.get("responses", {})))
 header_names = {p["name"] for p in post_create.get("parameters", []) if p.get("in") == "header"}

@@ -618,3 +618,87 @@ def to_decision_result(session: Session, approval: Approval) -> QCSDecisionResul
     picked = session.get(Quotation, qcs.recommended_quotation_id)
     base = QCSApprovalRead.model_validate(approval).model_dump()
     return QCSDecisionResult(**base, qcs_status=qcs.status, levels_required=rules.required_qcs_approval_levels(picked))
+
+
+
+# ---------- block D: withdraw (D75-D79) ----------
+
+def _live_po_count(session: Session, rfq_id: int) -> int:
+    """POs in a live status on ANY quotation of this RFQ (the same rule cancel_rfq uses, D76)."""
+    return session.scalar(
+        select(func.count()).select_from(PurchaseOrder)
+        .join(Quotation, PurchaseOrder.quotation_id == Quotation.id)
+        .where(Quotation.rfq_id == rfq_id, PurchaseOrder.status.in_(ACTIVE_PO_STATUSES))
+    )
+
+
+def _no_live_po():
+    """SQL condition: no live PO on any quotation of the RFQ of the QCS being updated. Used INSIDE the UPDATE (D77)."""
+    return ~exists().where(
+        PurchaseOrder.quotation_id == Quotation.id,
+        Quotation.rfq_id == QCS.rfq_id,
+        PurchaseOrder.status.in_(ACTIVE_PO_STATUSES),
+    )
+
+
+def _withdraw_lost(session: Session, qcs_id: int) -> QCSError:
+    """The conditional UPDATE matched nothing. Read the state AFTER it and name what really happened (D78)."""
+    session.rollback()
+    session.expire_all()
+    qcs = session.get(QCS, qcs_id)
+    if qcs.status != QCSStatus.APPROVED.value:
+        return QCSConflict("QCS_NOT_APPROVED", f"QCS is {qcs.status}; it changed at the same moment",
+                           qcs_status=qcs.status)
+    live = _live_po_count(session, qcs.rfq_id)
+    if live:
+        return QCSConflict("PO_EXISTS", "A purchase order appeared on one of this RFQ's quotations at the same moment",
+                           purchase_orders=live)
+    return QCSConflict("QCS_CHANGED", "The QCS changed at the same moment; read it and decide again",
+                       qcs_status=qcs.status)
+
+
+def withdraw_qcs(session: Session, qcs_id: int, payload: QCSWithdraw, *, correlation_id: str | None = None) -> QCS:
+    """APPROVED -> WITHDRAWN, only while no live PO exists on any quotation of the RFQ. Terminal.
+
+    Order (D75): 404, names and reason (422), 409 state, 409 live PO. Approval rows are never touched (D11):
+    they stay as history. The RFQ stays CLOSED; the buyer cancels it and re-tenders.
+    """
+    qcs = get_qcs(session, qcs_id)
+    actor = _clean_name(payload.actor, "actor")
+    reason = payload.reason.strip() if isinstance(payload.reason, str) else ""
+    if not reason:
+        raise QCSInvalid("REASON_REQUIRED", "A reason is required to withdraw a QCS")
+    if len(reason) > rules.MAX_COMMENT_LENGTH:
+        raise QCSInvalid("REASON_TOO_LONG", f"The reason may have at most {rules.MAX_COMMENT_LENGTH} characters",
+                         max_length=rules.MAX_COMMENT_LENGTH)
+    if qcs.status != QCSStatus.APPROVED.value:
+        raise QCSConflict("QCS_NOT_APPROVED", f"QCS is {qcs.status}; only an APPROVED QCS can be withdrawn",
+                          qcs_status=qcs.status)
+    live = _live_po_count(session, qcs.rfq_id)
+    if live:
+        raise QCSConflict("PO_EXISTS", "A live purchase order exists on one of this RFQ's quotations",
+                          purchase_orders=live)
+
+    try:
+        # ONE statement re-checks the status AND the live-PO rule, so a PO arriving right now cannot slip in.
+        result = session.execute(
+            update(QCS)
+            .where(QCS.id == qcs.id, QCS.status == QCSStatus.APPROVED.value, _no_live_po())
+            .values(status=QCSStatus.WITHDRAWN.value)
+        )
+        if result.rowcount != 1:
+            raise _withdraw_lost(session, qcs_id)
+        session.refresh(qcs)
+        record_audit(
+            session, actor=actor, action="QCS_WITHDRAWN", entity_type="QCS", entity_id=qcs.id,
+            before={"status": QCSStatus.APPROVED.value},
+            after={"status": qcs.status, "reason": reason},
+            correlation_id=correlation_id,
+        )
+        session.commit()
+    except QCSError:
+        raise
+    except Exception:
+        session.rollback()
+        raise
+    return qcs

@@ -4,11 +4,11 @@ from sqlalchemy.orm import Session
 from app.api.headers import CorrelationHeader, IdempotencyKeyHeader, clean_header
 from app.db.database import get_db
 from app.schemas.qcs import (
-    QCSApprovalRead, QCSCreate, QCSDecision, QCSDecisionResult, QCSRead, QCSSubmit, QCSUpdate,
+    QCSApprovalRead, QCSCreate, QCSDecision, QCSDecisionResult, QCSRead, QCSSubmit, QCSUpdate, QCSWithdraw,
 )
 from app.services.qcs import (
     QCSError, create_qcs, decide_qcs, get_qcs, get_qcs_for_rfq, list_approvals, submit_qcs,
-    to_decision_result, to_read, update_qcs,
+    to_decision_result, to_read, update_qcs, withdraw_qcs,
 )
 
 router = APIRouter(tags=["qcs"])
@@ -96,8 +96,6 @@ def submit(qcs_id: int, payload: QCSSubmit, db: Session = Depends(get_db), corre
         _raise(exc)
 
 
-
-
 @router.post(
     "/qcs/{qcs_id}/decision",
     response_model=QCSDecisionResult,
@@ -135,6 +133,23 @@ def decide(
         response.headers["Idempotent-Replay"] = "true"
     return result
 
+
+@router.post("/qcs/{qcs_id}/withdraw", response_model=QCSRead)
+def withdraw(qcs_id: int, payload: QCSWithdraw, db: Session = Depends(get_db), correlation_id: CorrelationHeader = None):
+    """Withdraw an APPROVED QCS (APPROVED -> WITHDRAWN, terminal). Any named actor, a reason is required.
+
+    Refused with 409 PO_EXISTS while a purchase order in a live status (PENDING_APPROVAL, APPROVED, ERP_PUSHED)
+    exists on ANY quotation of the RFQ. Approval history is kept. The RFQ stays CLOSED: cancel it and re-tender.
+    No Idempotency-Key: a repeat is 409 QCS_NOT_APPROVED with qcs_status WITHDRAWN. Identities are unverified.
+
+    Check order: 404, 422, 409 QCS_NOT_APPROVED, 409 PO_EXISTS. A race returns the code of the state that
+    actually won.
+    """
+    corr = clean_header(correlation_id, "X-Correlation-ID")
+    try:
+        return to_read(db, withdraw_qcs(db, qcs_id, payload, correlation_id=corr))
+    except QCSError as exc:
+        _raise(exc)
 
 
 @router.get("/qcs/{qcs_id}/approvals", response_model=list[QCSApprovalRead])
